@@ -10,6 +10,7 @@ import re
 in_dir = r"C:\Users\user\OneDrive - Apprio, Inc\Documents\Sprints\CCP documentation\InFiles"
 out_dir = r"C:\Users\user\OneDrive - Apprio, Inc\Documents\Sprints\CCP documentation\OutFiles"
 
+
 class InvalidTableDFException(Exception):
     "Tables Data Frame has incorrect number of columns."
 class InvalidColsDFException(Exception):
@@ -164,7 +165,8 @@ def processSQLFile(in_file, out_file):
                     if bSemiColon:
                         bSelectStmt = False
                         # process SELECT Statement
-                        processSelectStmt(arrSelectStmt)
+                        sSelect = cleanseSQLStatment(arrSelectStmt)
+                        processSelectStmt(sSelect)
                         arrSelectStmt.clear()
                         continue
                     else:        
@@ -186,28 +188,25 @@ def processSQLFile(in_file, out_file):
             else:
                 #print("END OF FILE")
                 if bSelectStmt:
-                    processSelectStmt(arrSelectStmt)
+                    sSelect = cleanseSQLStatment(arrSelectStmt)
+                    processSelectStmt(sSelect)
 
 
     except Exception as ex:
         print("Exception occurred in function processSQLFile. ")
         print(ex.with_traceback)
+        ex.d
 
-
-def processSelectStmt(arrSelectStmt):
-
-    #print("Start function ProcessSelectStmt ")
-
-    arrTables = []
-    arrColumns = []
-
-    try:
+def cleanseSQLStatment(arrSelectStmt):
 
         #########################################
         # Convert SELECT array into single String
         #########################################
         sSelect = ' '.join(arrSelectStmt)
         #print(sSelect)
+
+        # Remove ending semi-colon
+        sSelect = sSelect.replace(";","")
 
         ################################
         # modify parameter placeholders
@@ -216,9 +215,19 @@ def processSelectStmt(arrSelectStmt):
         sSelect = sSelect.replace("$ENVNAME","PRD")
         sSelect = sSelect.replace("${ENVNAME}","PRD")
 
-        # Remove false "FROM"s from SELECT statement
-        sSelect = removeBogusFROMs(sSelect)
-        #print(sSelect)
+        #################################################
+        # Create separation between items to more easily
+        # create tokens for processing.
+        # (Add space between token if it doesn't exist.)
+        #################################################                
+        sSelect = sSelect.replace("="," = ")
+        sSelect = sSelect.replace(","," , ")
+        sSelect = sSelect.replace("'"," ' ")
+        sSelect = sSelect.replace("("," ( ")
+        sSelect = sSelect.replace(")"," ) ")
+        sSelect = sSelect.replace("+"," + ")
+        sSelect = sSelect.replace("/"," / ")
+        sSelect = sSelect.replace("*"," * ")
 
         ##############################################################
         # Remove JOIN Qualifier keywords  (to make it easier to parse)
@@ -229,44 +238,290 @@ def processSelectStmt(arrSelectStmt):
         sSelect = sSelect.replace("RIGHT ","")
         sSelect = sSelect.replace("CROSS ","")
 
+        ######################################################
+        # remove embedded spaces between symbolic and col name
+        # Ex: "CLEOPP. CLM_LINE_OTHR_PYR_PMT_SQNC_NUM"
+        ######################################################
+        sSelect =  sSelect.replace(". ", ".")
+
+        #########################################################
         # replace multiple spaces with single space between text 
+        #########################################################
+        sSelect = re.sub('\\s+', ' ', sSelect)
+
+        # Remove false "FROM"s from SELECT statement
+        sSelect = removeBogusFROMs(sSelect)
+        #print(sSelect)
+
+        #########################################################
+        # replace multiple spaces with single space between text 
+        #########################################################
         sSelect = sSelect.strip()
         sSelect = re.sub('\\s+', ' ', sSelect)
 
-        # init Loop variables
-        idx = 0
+        return sSelect
+
+def processSelectStmt(sSelect):
+
+    #############################################
+    # This is a recursive function 
+    #   (A function that call itself)
+    # Note: sSelect input parameter should not have
+    #       beginning or ending parens for this
+    #       function to work properly.
+    #############################################
+
+    #print("Start function ProcessSelectStmt ")
+    arrTables = [] 
+    arrColumns = []
+    arrSubSelect = []
+    arrCurrentSelect = []
+
+    bInitSelect = True
+
+    bSubSelect = False
+    bAdditionalSelect = False
+    bASActive = False
+    bExtractColsFromJoin = False
+
+    eSQLInProcessMode = ""
+    eSQLInProcessTokenSeqNum = 0
+
+    sColumnAndSymbol = ""
+    iParenCount = 0
+    
+    try:
 
         ################################
         # process SELECT statement
         ################################
-        # find start of SELECT statement
-        idxSelect = sSelect.find("SELECT ",idx)
+        tokens = sSelect.split(" ")
 
-        if idxSelect >= 0:
-            idx = idxSelect
+        # Ensure that if 1st and last token are parens, that they are initialized to spaces
+        if len(tokens) > 0:
+            iMaxToken = len(tokens) - 1
+            if tokens[0] == "(":
+                if tokens[iMaxToken] == ")":
+                    tokens[0] = ""
+                    tokens[iMaxToken]  = ""
+                else:
+                    print("Error - mismatched beginning and ending parens")    
 
-            # Find start of FROM Table statment
-            idxFrom = sSelect.find(" FROM ",idx)
+        # Main loop processing
+        for token in tokens:
 
-            # Get SELECT Columns
-            arrColumns = extractCols(sSelect [idxSelect : idxFrom])
-            print(arrColumns)
+            if token == "TAYLOR":
+                print(sSelect)
+                print("taylor")
 
-            # Get tables
-            arrTables = extractTblNames(sSelect [idxFrom:])
-            print("arrTables")
-            print(arrTables)
+            if not bSubSelect:
+                arrCurrentSelect.append(token)
 
-            # Get columns from FROM/JOIN statements
-            arrColumns += extractColsFromJoins(sSelect [idxFrom:])
-            #arrColumns.extend(arrColumns2)
-            print("arrColumns")
-            print(arrColumns)
+            # These IFs should not be part of Main If/Else
+            if token == ")":
+                iParenCount -= 1
+
+            if token == "(":
+                iParenCount += 1
+
+            # process current token
+            if bSubSelect:
+                if iParenCount == 0:
+                    bSubSelect = False
+                    
+                    print("subSelect")
+                    print(arrSubSelect)
+
+                    sSubSelect = ' '.join(arrSubSelect)
+                    arrSubSelect = []
+                    #print("Call to process subSelect")
+                    processSelectStmt(sSubSelect)
+                else:  
+                    arrSubSelect.append(token)
+
+            elif bAdditionalSelect:
+                # Once we see the UNION, MINUS, INTERSECT reserved words
+                #     --> collect all other statements and process like a subSelect.
+                # The end of the Additional Select is not a Paren, but end-of-tokens
+                arrSubSelect.append(token)
+
+            elif token == "SELECT":
+                if bInitSelect:
+                    bInitSelect = False
+                    eSQLInProcessMode = 'S'
+                else:
+                    bSubSelect = True
+                    arrSubSelect.append(token)
+
+                    if (eSQLInProcessMode == "F" or 
+                        eSQLInProcessMode == "J"):
+                        arrTables.append("?.SUBSELECT_TBL")
+                        eSQLInProcessTokenSeqNum = 1
+
+            elif token == "FROM":
+                eSQLInProcessMode = 'F'
+                eSQLInProcessTokenSeqNum = 0
+
+            elif token == "JOIN":
+                eSQLInProcessMode = 'J'
+                eSQLInProcessTokenSeqNum = 0
+                bExtractColsFromJoin = False
+
+            elif token == "QUALIFY":
+                eSQLInProcessMode = 'Q'
+                eSQLInProcessTokenSeqNum = 0
+
+            elif token == "UNION":
+                eSQLInProcessMode = 'U'
+                eSQLInProcessTokenSeqNum = 0
+                bAdditionalSelect = True
+
+            elif token == "MINUS":
+                eSQLInProcessMode = 'M'
+                eSQLInProcessTokenSeqNum = 0                
+                bAdditionalSelect = True
+
+            elif token == "INTERSECT":
+                eSQLInProcessMode = 'I'
+                eSQLInProcessTokenSeqNum = 0                
+                bAdditionalSelect = True
+
+            elif token == "WHERE":  
+                eSQLInProcessMode = 'W' 
+                eSQLInProcessTokenSeqNum = 0
+
+            elif token == "GROUP":  
+                eSQLInProcessMode = 'G' 
+                eSQLInProcessTokenSeqNum = 0
+
+            #---------------------------------
+            # Process SELECT Statement
+            #---------------------------------
+            elif eSQLInProcessMode == 'S':
+                # SELECT statement is active
+                if token == "AS":
+                    bASActive = True
+                    continue
+                elif bASActive:
+                    # Skip 'AS' Name
+                    bASActive = False
+                    continue
+                else:    
+                    sColumnAndSymbol = GetColSymbolAndName(token)
+                    if sColumnAndSymbol != "":
+                        arrColumns.append(sColumnAndSymbol) 
+
+            #---------------------------------
+            # Process QUALIFY Statement
+            #---------------------------------
+            elif eSQLInProcessMode == 'Q':
+                    sColumnAndSymbol = GetColSymbolAndName(token)
+                    if sColumnAndSymbol != "":
+                        arrColumns.append(sColumnAndSymbol)     
+
+            #---------------------------------
+            # Process FROM Statement
+            #---------------------------------
+            elif eSQLInProcessMode == 'F':
+                # FROM statement is active
+                eSQLInProcessTokenSeqNum += 1
+
+                # get TableName
+                if eSQLInProcessTokenSeqNum == 1:
+                    arrTables.append(token)
+                elif token == "AS":
+                    # SKIP token --> symbol to follow
+                    continue    
+                else:
+                    # get associated symbol for TableName (if exists)
+                    item = len(arrTables) - 1
+                    arrTables[item] = arrTables[item] + " " + token
+
+            #---------------------------------
+            # Process JOIN Statements
+            #---------------------------------
+            elif eSQLInProcessMode == 'J':
+                # JOIN statement is active
+                if token == "ON":
+                    bExtractColsFromJoin = True
+
+                if bExtractColsFromJoin:                    
+                    sColumnAndSymbol = GetColSymbolAndName(token)
+                    if sColumnAndSymbol != "":
+                        arrColumns.append(sColumnAndSymbol) 
+
+                else:
+                    eSQLInProcessTokenSeqNum += 1
+
+                    # get TableName
+                    if eSQLInProcessTokenSeqNum == 1:
+                        arrTables.append(token)
+                    elif token == "AS":
+                        # SKIP token --> symbol to follow
+                        continue    
+                    else:
+                        # get associated symbol for TableName (if exists)
+                        item = len(arrTables) - 1
+                        arrTables[item] = arrTables[item] + " " + token
+
+            #---------------------------------
+            # Process WHERE and GROUP BY Stmt 
+            #---------------------------------
+            elif eSQLInProcessMode == 'W' or eSQLInProcessMode == 'G' :
+                # WHERE statement is active
+                sColumnAndSymbol = GetColSymbolAndName(token)
+                if sColumnAndSymbol != "":
+                    arrColumns.append(sColumnAndSymbol) 
+
+            else:
+                # bypass token
+                pass
+
+        else:
+            if bAdditionalSelect:
+                bAdditionalSelect = False
+                    
+                sSubSelect = ' '.join(arrSubSelect)
+
+                print("subSelect")
+                print(sSubSelect)
+
+                arrSubSelect = []
+                #print("Call to process subSelect")
+                processSelectStmt(sSubSelect)       
 
         ######################################
         # End of parsing SELECT statement
         ######################################
         print("End of parsing Select statement\n")
+
+        ##sTempString = ' '.join(arrCurrentSelect)
+        ##print("String that was parsed")
+        ##print(sTempString)
+
+        # remove duplicate entries
+        arrColumns = list(dict.fromkeys(arrColumns)) 
+        print("arrColumns")
+        print(arrColumns)
+
+        # remove duplicate entries
+        arrTables = list(dict.fromkeys(arrTables)) 
+
+        #############################################
+        # If only one table and no Symbol
+        #  --> assume all cols are for that table
+        # --> add default symbol so Pandas join will 
+        #     match table
+        #############################################
+        if len(arrTables) == 1:
+            sTableAndSymbol = arrTables[0]
+            # only table name is present --> add symbol
+            if len(sTableAndSymbol.split(" ")) == 1:
+                arrTables[0] = arrTables[0] + " ?"
+
+
+        print("arrTables")
+        print(arrTables)
 
         ######################################
         # Create output records
@@ -278,243 +533,37 @@ def processSelectStmt(arrSelectStmt):
         print("Exception in function ProcessSelectStmt")
         print(ex.with_traceback)
 
+def GetColSymbolAndName(token):
 
-def extractCols(sString):
-    ###################################################
-    # Expect that sString is "SELECT" thru "FROM table"
-    ###################################################  
+    sColSymbolAndName = ""
 
-    arrColumns = []
+    # Token contains possible column name    
+    if token.find(".") >= 0:
 
-    #################################################
-    # Remove ' AS NAME ' from SQL String 
-    # (This is so we don't pick these up as possible 
-    #  column names later on).
-    ##################################################                
-    while True:  
-        idxStart = sString.find(" AS ")
-        if idxStart == -1:
-            break
-        # find end of 2nd token
-        idxEnd = sString.find(" ", idxStart + len(" AS ") ) 
-        sString = sString[:idxStart] + sString[idxEnd:]
-        idxStart = idxEnd
-
-    #################################################
-    # Create separation between items to create tokens
-    # to find columns.
-    #################################################                
-    # substr(col,1,5) --> col15
-    sString = sString.replace("="," ")
-    sString = sString.replace(","," ")
-    sString = sString.replace("'","")
-    sString = sString.replace("("," ")
-    sString = sString.replace(")"," ")
-    sString = sString.replace("+"," ")
-    sString = sString.replace("/"," ")
-
-    # remove multiple consecutive spaces
-    sString = re.sub('\\s+', ' ', sString)
-
-    ######################################################
-    # remove embedded spaces between symbolic and col name
-    # Ex: "CLEOPP. CLM_LINE_OTHR_PYR_PMT_SQNC_NUM"
-    ######################################################
-    if  sString.find(". ") >= 0:
-        sString =  sString.replace(". ", ".")
-
-    #################################################
-    # Break string into tokens to find column names
-    #################################################
-    tokens = sString.split(" ")
-
-    for token in tokens:
-        # Token contains possible column name    
-        if token.find(".") >= 0:
-
-            # skip format numeric fields  --> .9999"
-            if token.find(".9") >= 0:
-                continue
-
-            # skip FORMAT 'yyyymmddBHH:MI:SS.S(6)'
-            if token.find("HH:MI:SS.S") >= 0:
-                continue
-
-            #print(token)
-            arrColumns.append(token)
-
-        # potential columns;      
-        elif token.find("_") >= 0:
-            if token.find("CURRENT_DATE") >= 0:
-                continue
-            elif token.find("ADD_MONTHS") >= 0:
-                continue
-            elif token.find("TO_DATE") >= 0:
-                continue
-            elif token.find("CHAR_LENGTH") >= 0:
-                continue                    
-            else:
-                sUnknownSymbolic = "?."  
-                arrColumns.append(sUnknownSymbolic+token)  
-                #print(token)  
-
-    # remove dups from list
-    return list(dict.fromkeys(arrColumns)) 
-
-
-def findTwoTokenLen(string, substring):
-    # find end of 2nd token
-    # Ex: "schema.table A "
-    idx = string.find(substring)
-    idx2 = string.find(substring,idx + 1)
-
-    # Possibility that 2nd token cannot be found (end of string)
-    # Ex: "TABLE ;" --> set Length to end of 1st token
-    if idx2 == -1:
-        idx2 = idx
-
-    return idx2    
-
-
-def extractTblNames(sString):
-    ##############################################################
-    # Expect String contains FROM and JOIN statements only.
-    ##############################################################
-
-    arrTableNames = []
-
-    # remove multiple consecutive spaces
-    sString = re.sub('\\s+', ' ', sString)
-
-    ##############################################################
-    # Extract Table names: Search for "FROM" 1st time.
-    #                      Search for "JOIN" subsequent times.
-    ##############################################################
-    idx = 0
-    sSearchStr = "FROM "
-
-    while True:
-        # find start of SearchStr
-        idxTblStart = sString.find(sSearchStr,idx)
-        
-        # no more to find
-        if idxTblStart == -1:
-            break
-
-        # skip past SearchStr token    
-        idxTblStart += len(sSearchStr)
-
-        # set current index      
-        idx = idxTblStart
-
-        # set current index to end of 2nd token --> Ex. "schema.table sym "
-        idx += findTwoTokenLen(sString[idx:], " ")
-
-        # Ex. "schema.table sym"
-        TblAndSymbol = sString[idxTblStart:idx] 
-        #print (TblAndSymbol)
-
-        # If two tokens returned --> verify that 2nd token is symbol
-        # Note: Set TblAndSymbol to Table only when no symbol exists
-        tokens = TblAndSymbol.split(" ")
-        if len(tokens) == 2:
-            if ((sSearchStr == "FROM " and tokens[1] == "JOIN") or 
-                (sSearchStr == "FROM " and tokens[1] == "WHERE") or 
-                (sSearchStr == "JOIN " and tokens[1] == "ON")):
-                TblAndSymbol = tokens[0]
-        elif len(tokens) == 1:
-            # there was only one token to be found; no symbolic for table
+        # skip format numeric fields  --> .9999"
+        if token.find(".9") >= 0:
             pass
+        elif token.find("HH:MI:SS.S") >= 0:    
+            # skip FORMAT 'yyyymmddBHH:MI:SS.S(6)'
+            pass
+        else:    
+            sColSymbolAndName = token
 
-        #print (TblAndSymbol)
+    # potential columns;      
+    elif token.find("_") >= 0:
+        if token.find("CURRENT_DATE") >= 0:
+            pass
+        elif token.find("ADD_MONTHS") >= 0:
+            pass
+        elif token.find("TO_DATE") >= 0:
+           pass
+        elif token.find("CHAR_LENGTH") >= 0:
+            pass                    
+        else:
+            sUnknownSymbolic = "?."  
+            sColSymbolAndName = sUnknownSymbolic+token
 
-        arrTableNames.append(TblAndSymbol)
-
-        # Search for JOIN Statements after initial FROM 
-        sSearchStr = "JOIN "
-
-    ##############################################################
-    # return list of Tables
-    ##############################################################
-    return arrTableNames
-
-def extractColsFromJoins(sString):
-
-    ##############################################################
-    # Expect String contains FROM/JOIN statements only.
-    ##############################################################
-    arrColNames = []
-
-    #################################################
-    # Create separation between items to create tokens
-    # to find columns.
-    #################################################                
-    sString = sString.replace("="," ")
-    sString = sString.replace("+"," ")
-    sString = sString.replace("/"," ")
-    sString = sString.replace("("," ")
-    sString = sString.replace(")"," ")
-
-    # remove multiple consecutive spaces
-    sString = re.sub('\\s+', ' ', sString)
-
-    ################################################################
-    # Note: Will skip FROM statement; 
-    #       Process each JOIN skipping table name and looking for
-    #       Columns used in join conditions  
-    ################################################################
-    # Find first JOIN
-    idx = sString.find(" JOIN ",0) 
-
-    if idx >= 0:
-
-        while True:
-
-            # Skip JOIN token
-            idx += len(" JOIN ")
-
-            # find start of Str JOIN condition
-            idxStart = sString.find("ON ",idx)
-
-            # find end of current JOIN conditions (Start of next JOIN)
-            idxEnd = sString.find(" JOIN ",idx)
-
-            # Adjust idx to point to next JOIN 
-            idx = idxEnd
-
-            # Split JOIN conditions into tokens
-            if idxEnd >= 0:
-                tokens = sString[idxStart : idxEnd].split(" ")
-            else:    
-                tokens = sString[idxStart : ].split(" ")
-
-            for token in tokens:
-                if token.find("_") >= 0:
-                    arrColNames.append(token)
-
-            # no more JOINS to find
-            if idxEnd == -1:
-                break
-
-    ##############################################################
-    # Process WHERE and/or GROUP BY
-    ##############################################################
-    idx = sString.find(" WHERE ",0) 
-    if idx == -1:
-        idx = sString.find(" GROUP BY ",0) 
-
-    if idx >= 0:
-        tokens = sString[idx : ].split(" ")
-
-        for token in tokens:
-            if token.find("_") >= 0:
-                arrColNames.append(token)       
-
-    ##############################################################
-    # return list of Tables
-    ##############################################################
-    return arrColNames
-
+    return sColSymbolAndName          
 
 def removeBogusFROMs(sString):
 
@@ -706,7 +755,15 @@ for projDirBase in projDirBaseList:
     for inSQLFile in fileSQLList:
         #print(inSQLFile)
         in_file = os.path.join(projDirPath,inSQLFile)
-        outSQLFile = inSQLFile.replace(".txt",".csv")
+
+        # find inSQLFile extension and replace with .csv ext for outSQLFile
+        fileAndExt = os.path.splitext(inSQLFile)
+        # array has 2 elements: file and ext 
+        if len(fileAndExt) == 2:
+            outSQLFile = inSQLFile.replace(fileAndExt[1],".csv")
+        else:
+            outSQLFile = inSQLFile + ".csv"
+
         out_file = os.path.join(os.path.join(out_dir,projDirBase), outSQLFile)
 
         print('*' * 10)
