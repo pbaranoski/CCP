@@ -311,10 +311,6 @@ def processSelectStmt(sSelect):
         # Main loop processing
         for token in tokens:
 
-            if token == "TAYLOR":
-                print(sSelect)
-                print("taylor")
-
             if not bSubSelect:
                 arrCurrentSelect.append(token)
 
