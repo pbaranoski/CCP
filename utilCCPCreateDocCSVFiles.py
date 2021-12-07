@@ -16,9 +16,9 @@ class InvalidTableDFException(Exception):
 class InvalidColsDFException(Exception):
     "Columns Data Frame has incorrect number of columns."
 
-################################
+#################################
 # functions
-################################
+#################################
 def processSQLFile(in_file, out_file):
 
     #print("Start function processSQLFile")
@@ -739,11 +739,13 @@ def MergeTblAndCols(arrTableLines, arrColumns):
         print(ex.with_traceback)
         
 
-##################
+############################################################################################################
 # Main
 # 1) iterate over Input directory's project sub-directories (i.e., BLUE_BUTTON).
 # 2) for each project sub-directory, process each .txt file and write .csv file to Output/project directory
-##################
+# 3) Need to add Python logger configuration file
+############################################################################################################
+
 projDirBaseList = (dirItem for dirItem in os.listdir(in_dir) if os.path.isdir(os.path.join(in_dir,dirItem)) )
 
 for projDirBase in projDirBaseList:
