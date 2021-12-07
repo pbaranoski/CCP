@@ -43,10 +43,11 @@ def processSQLFile(in_file, out_file):
 
             # read entire input file
             inrecs = iftxt.readlines()
-
+            
             for inrec in inrecs:
-                # remove leading and trailing spaces
-                rec = inrec.strip()
+                # remove leading and trailing spaces and upper case text
+                rec = inrec.strip().upper()
+                rec = rec.replace("\t"," ")
 
                 #skip blank lines
                 if rec == "":
@@ -55,7 +56,7 @@ def processSQLFile(in_file, out_file):
                 ################################
                 # Set boolean values
                 ################################
-                if rec.find('/*') >= 0:
+                if rec [0:2] == '/*':    
                     bCommentStrt = True
                 else:
                     bCommentStrt = False
@@ -71,7 +72,7 @@ def processSQLFile(in_file, out_file):
                     bSemiColon = False
 
                 ################################
-                # Process multi-line comments
+                # Skip multi-line comments
                 ################################
                 if bCommentStrt:
                     if bCommentEnd:
@@ -83,12 +84,33 @@ def processSQLFile(in_file, out_file):
                     if bCommentEnd:
                         bInComment = False
                     continue
-
+ 
                 ################################
-                # Process single line comments
+                # Skip single line comments
                 ################################
                 if rec[0:2] == '--':
                     continue
+
+                ##########################################
+                # remove in-line comments following 
+                #  valid SQL text
+                ##########################################
+                idx = rec.find("--")
+                if idx >= 0:
+                    rec = rec[:idx]
+
+                ##########################################
+                # remove in-line comments following 
+                #  valid SQL text 
+                ##########################################
+                idxStartComment = rec.find("/*",1) 
+                if idxStartComment >= 0:
+                    idxEndComment = rec.find("*/") 
+                    codeBeforeComment = rec[0:idxStartComment]
+                    codeAfterComment = rec[idxEndComment + 2: ]
+                    rec = codeBeforeComment + " " + codeAfterComment
+                    if rec.strip() == "":
+                        continue 
 
                 ################################
                 # Process IDR commands
@@ -107,7 +129,7 @@ def processSQLFile(in_file, out_file):
                 ################################
                 # Process IDR SQL commands
                 ################################
-                if rec[0:5].upper() == 'CALL ' or rec[0:8].upper() == 'COLLECT ' :
+                if rec[0:5] == 'CALL ' or rec[0:8] == 'COLLECT ' :
                     if bSemiColon:
                         pass
                     else:
@@ -121,9 +143,9 @@ def processSQLFile(in_file, out_file):
                 ################################
                 # Skip Create/Drop Table line   
                 ################################
-                if ((rec.upper().find("DROP TABLE") >= 0) or
-                    (rec.upper().find("CREATE TABLE") >= 0) or
-                    (rec.upper().find("CREATE MULTISET TABLE") >= 0) 
+                if ((rec.find("DROP TABLE") >= 0) or
+                    (rec.find("CREATE TABLE") >= 0) or
+                    (rec.find("CREATE MULTISET TABLE") >= 0) 
                     ):
                     continue
 
@@ -163,6 +185,7 @@ def processSQLFile(in_file, out_file):
                 if bSelectStmt:
                     processSelectStmt(arrSelectStmt)
 
+
     except Exception as ex:
         print("Exception occurred in function processSQLFile. ")
         print(ex.with_traceback)
@@ -182,11 +205,14 @@ def processSelectStmt(arrSelectStmt):
         for rec in arrSelectStmt:
 
             ################################
-            # Extract table names
+            # modify parameter placeholders
             ################################
             rec = rec.replace("&DBENV.","PRD")
             rec = rec.replace("$ENVNAME","PRD")
-            rec = rec.upper()
+            rec = rec.replace("${ENVNAME}","PRD")
+
+            # replace multiple spaces with single space between text 
+            rec = re.sub('\\s+', ' ', rec)
 
             #print(rec)    
 
@@ -198,19 +224,43 @@ def processSelectStmt(arrSelectStmt):
             #               FROM BENE_FCT_OBSLT_DT) + 1),1)-1
             ##############################################################
             if  rec[0:4].find("FROM") >= 0 or rec.find("JOIN") >= 0:
-                if rec.find(".") >= 0:
+
+                # skip false positives --> "FROM 1 FOR 2-CHARS" 
+                # look for column names in rec 
+                if rec.find(" FOR ") >= 0:
+                    pass
+                # ignore when result set is used for table
+                # look for column names in rec
+                elif rec.find("SELECT") >= 0:
+                    pass
+                # found table name
+                elif rec.find(".") >= 0:
                     arrTableLines.append(rec)
+                # text continued on next line    
                 else:    
                     bFROMJOINCont = True
                     sFROMJOINStmt = rec
                 continue
+
             elif bFROMJOINCont:
                 bFROMJOINCont = False
-                if rec.find(".") >= 0:
-                    arrTableLines.append(sFROMJOINStmt+ " "+rec) 
+                # skip false positives --> "FROM 1 FOR 2-CHARS"  
+                # look for column names in rec
+                if rec.find(" FOR ") >= 0:
+                    sFROMJOINStmt = ""
+                    pass
+                # A result set is being used for table, so ignore
+                # look for column names in rec
+                elif rec.find("SELECT") >= 0:
+                    sFROMJOINStmt = ""
+                    pass    
+                else:
+                    # get table name
+                    if rec.find(".") >= 0:
+                        arrTableLines.append(sFROMJOINStmt+ " "+rec) 
 
-                sFROMJOINStmt = ""
-                continue
+                    sFROMJOINStmt = ""
+                    continue
 
             #################################################
             # Create separation between items to create tokens
@@ -269,7 +319,7 @@ def processSelectStmt(arrSelectStmt):
                         continue
                     elif token.find("CHAR_LENGTH") >= 0:
                         continue                    
-                    elif rec.upper().find("AS ") == -1:
+                    elif rec.find("AS ") == -1:
                         sUnknownSymbolic = "?."  
                         arrColumns.append(sUnknownSymbolic+token)  
                         #print("Taylor --> "+ token)  
@@ -343,6 +393,9 @@ def MergeTblAndCols(arrTableLines, arrColumns):
         NOFTblCols = len(dfIDRTables.columns)
         if NOFTblCols == 3:
             print("Tables Data Frame has correct # of columns! ")  
+        elif NOFTblCols == 2:
+            # add blank symbolic for each table (assuming no symbol found)
+            dfIDRTables['Symbol'] = " "
         else:      
             print(dfIDRTables)
             raise InvalidTableDFException(NOFTblCols)
@@ -416,7 +469,7 @@ def MergeTblAndCols(arrTableLines, arrColumns):
 # 1) iterate over Input directory's project sub-directories (i.e., BLUE_BUTTON).
 # 2) for each project sub-directory, process each .txt file and write .csv file to Output/project directory
 ##################
-projDirBaseList = (projDirBase for projDirBase in os.listdir(in_dir) if os.path.isdir(os.path.join(in_dir,projDirBase)) )
+projDirBaseList = (dirItem for dirItem in os.listdir(in_dir) if os.path.isdir(os.path.join(in_dir,dirItem)) )
 
 for projDirBase in projDirBaseList:
     #print (projDirBase)
