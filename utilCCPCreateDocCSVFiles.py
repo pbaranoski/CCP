@@ -7,6 +7,7 @@ import sys
 import pandas
 import re
 
+# Enhancement idea: Create parameter file that sets these directories
 in_dir = r"C:\Users\user\OneDrive - Apprio, Inc\Documents\Sprints\CCP documentation\InFiles"
 out_dir = r"C:\Users\user\OneDrive - Apprio, Inc\Documents\Sprints\CCP documentation\OutFiles"
 
