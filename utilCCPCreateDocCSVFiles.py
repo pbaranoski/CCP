@@ -16,9 +16,9 @@ class InvalidTableDFException(Exception):
 class InvalidColsDFException(Exception):
     "Columns Data Frame has incorrect number of columns."
 
-################################
+#################################
 # functions
-################################
+#################################
 def processSQLFile(in_file, out_file):
 
     #print("Start function processSQLFile")
