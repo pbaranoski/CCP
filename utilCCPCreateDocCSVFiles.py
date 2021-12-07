@@ -739,25 +739,12 @@ def MergeTblAndCols(arrTableLines, arrColumns):
         print(ex.with_traceback)
         
 
-##################
+############################################################################################################
 # Main
 # 1) iterate over Input directory's project sub-directories (i.e., BLUE_BUTTON).
 # 2) for each project sub-directory, process each .txt file and write .csv file to Output/project directory
-##################
-
-logging.basicConfig(
-    #format="%(asctime)s %(levelname)-8s %(threadName)s %(funcName)s %(message)s", #--> %(name)s give logger name
-    format="%(asctime)s %(levelname)-8s %(funcName)-12s %(message)s",
-    encoding='utf-8',
-    datefmt="%Y-%m-%d %H:%M:%S", 
-    #filename=logfile, 
-    handlers=[
-    logging.FileHandler(logfile),
-    logging.StreamHandler(sys.stdout)],
-    level=logging.INFO)
-
-logger = logging.getLogger() 
-
+# 3) Need to add Python logger configuration file
+############################################################################################################
 
 projDirBaseList = (dirItem for dirItem in os.listdir(in_dir) if os.path.isdir(os.path.join(in_dir,dirItem)) )
 
